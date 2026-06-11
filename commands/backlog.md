@@ -49,7 +49,21 @@ The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but 
   - Failed: open + `backlog` + `failed` label (stays open for manual retry/fix)
 - The project is inferred from the repo name (e.g. `jamessoubry/clawband` → `clawband`)
 
-## Project map
+## Project config — `.backlog.yml`
+
+Each project can define a `.backlog.yml` in its root directory. The skill reads this first; the project map below is a fallback for projects that don't have one.
+
+```yaml
+# <project_dir>/.backlog.yml
+repo: jamessoubry/clawband      # GitHub repo (optional — skip GitHub steps if absent)
+deploy: cargo build --release   # deploy command (overrides fallback map)
+label: backlog                  # issue label to filter on (default: backlog)
+priority: [P0, P1, P2]         # priority label order, high→low (default)
+```
+
+When reading project config, check `<project_dir>/.backlog.yml` first. If it exists, use those values. If it doesn't exist or a field is missing, fall back to the project map below.
+
+## Project map (fallback)
 
 | Tag | Directory | Deploy | GitHub repo |
 |-----|-----------|--------|-------------|
@@ -72,18 +86,22 @@ Read the file. Find the **first** line matching `- [ ]`.
 If none exist: `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
 
 **GitHub issues mode:**
+
+Load `.backlog.yml` from the project dir (inferred from repo name) to get `BACKLOG_LABEL` and `PRIORITY_LABELS`. Then:
+
 ```bash
 unset GITHUB_TOKEN
-# Fetch open issues with backlog label, sorted by priority then issue number
+# BACKLOG_LABEL from .backlog.yml or default "backlog"
+# PRIORITY_LABELS from .backlog.yml or default ["P0","P1","P2"]
 ISSUE_JSON=$(gh issue list --repo "<owner/repo>" \
-  --label backlog --state open --limit 100 \
+  --label "$BACKLOG_LABEL" --state open --limit 100 \
   --json number,title,labels \
-  --jq '
+  --jq --arg p0 "${PRIORITY_LABELS[0]}" --arg p1 "${PRIORITY_LABELS[1]}" --arg p2 "${PRIORITY_LABELS[2]}" '
     def priority:
       .labels | map(.name) |
-      if contains(["P0"]) then 0
-      elif contains(["P1"]) then 1
-      elif contains(["P2"]) then 2
+      if contains([$p0]) then 0
+      elif contains([$p1]) then 1
+      elif contains([$p2]) then 2
       else 3 end;
     sort_by([priority, .number]) | .[0]
   ')
@@ -128,9 +146,22 @@ gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "in-progress"
 
 Pass `ISSUE_NUMBER` and `REPO` into the workflow for coder and releaser.
 
-### Step 5 — Read project context
+### Step 5 — Load project config and context
 
-Read `<project_dir>/CLAUDE.md` to understand architecture, build commands, test commands, and deploy pipeline before dispatching agents.
+First, read project config. Check for `<project_dir>/.backlog.yml`:
+```bash
+python3 -c "
+import yaml, sys
+try:
+    cfg = yaml.safe_load(open('<project_dir>/.backlog.yml'))
+    print(yaml.dump(cfg))
+except: print('NOT_FOUND')
+"
+```
+Use values from the YAML if present; fall back to the project map for any missing fields.
+Key values to resolve: `REPO`, `DEPLOY_CMD`, `BACKLOG_LABEL` (default: `backlog`), `PRIORITY_LABELS` (default: `[P0, P1, P2]`).
+
+Then read `<project_dir>/CLAUDE.md` to understand architecture, build commands, test commands, and deploy pipeline before dispatching agents.
 
 ### Step 6 — Run the feature pipeline
 
