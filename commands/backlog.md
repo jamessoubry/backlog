@@ -26,17 +26,17 @@ Work through a markdown todo list one feature at a time. Each tick: pick the fir
 
 ## Project map
 
-| Tag | Directory | Deploy |
-|-----|-----------|--------|
-| `main` | `/home/ubuntu/main` | — |
-| `mund` | `/home/ubuntu/mund` | `./deploy.sh` |
-| `gavel` | `/home/ubuntu/gavel` | `./deploy.sh` |
-| `replenish` | `/home/ubuntu/replenish` | `./deploy.sh` |
-| `filemover` | `/home/ubuntu/filemover` | CodeBuild via `./build.sh` |
-| `polybot` | `/home/ubuntu/polybot` | `./deploy.sh --deploy` |
-| `shortlink` | `/home/ubuntu/shortlink` | `./deploy.sh` |
-| `oneeye` | `/home/ubuntu/oneeye` | CodeBuild via `./build.sh` |
-| `clawband` | `/home/ubuntu/clawband` | `cargo build --release` + install |
+| Tag | Directory | Deploy | GitHub repo |
+|-----|-----------|--------|-------------|
+| `main` | `/home/ubuntu/main` | — | — |
+| `mund` | `/home/ubuntu/mund` | `./deploy.sh` | — |
+| `gavel` | `/home/ubuntu/gavel` | `./deploy.sh` | `jamessoubry/gavel` |
+| `replenish` | `/home/ubuntu/replenish` | `./deploy.sh` | — |
+| `filemover` | `/home/ubuntu/filemover` | CodeBuild via `./build.sh` | — |
+| `polybot` | `/home/ubuntu/polybot` | `./deploy.sh --deploy` | `jamessoubry/polybot` |
+| `shortlink` | `/home/ubuntu/shortlink` | `./deploy.sh` | — |
+| `oneeye` | `/home/ubuntu/oneeye` | CodeBuild via `./build.sh` | — |
+| `clawband` | `/home/ubuntu/clawband` | `cargo build --release` + install | `jamessoubry/clawband` |
 
 ## Instructions
 
@@ -76,6 +76,29 @@ fi
 python3 ~/backlog/trello.py card-move "$CARD_ID" in_progress
 ```
 
+### Step 4b — GitHub: create or find issue (projects with repos only)
+
+Look up the GitHub repo for the project from the project map. If the project has no repo (`—`), skip this step entirely — `ISSUE_NUMBER` stays empty.
+
+```bash
+unset GITHUB_TOKEN   # stale env var overrides stored gh CLI token
+REPO="jamessoubry/<project>"   # from project map
+
+# Find an existing open issue (in case of retry)
+ISSUE_NUMBER=$(gh issue list --repo "$REPO" --state open \
+  --search "<feature>" --json number --jq '.[0].number // empty' 2>/dev/null)
+
+# Create if not found
+if [ -z "$ISSUE_NUMBER" ]; then
+  ISSUE_NUMBER=$(gh issue create --repo "$REPO" \
+    --title "<feature>" \
+    --body "Backlog item — automated via /backlog" \
+    --json number --jq '.number')
+fi
+```
+
+Pass `ISSUE_NUMBER` and `REPO` into the workflow so the coder and releaser can use them.
+
 ### Step 5 — Read project context
 
 Read `<project_dir>/CLAUDE.md` to understand architecture, build commands, test commands, and deploy pipeline before dispatching agents.
@@ -89,6 +112,7 @@ Use the Workflow tool with three phases:
 - Makes targeted changes — no scope creep
 - Writes or updates tests alongside the feature
 - Commits with a clear message but does NOT push yet
+- If `ISSUE_NUMBER` is set, append `Closes <REPO>#<ISSUE_NUMBER>` as a footer line in the commit message
 
 **Phase 2 — Test** (label: `tester`)
 - Before running tests: `python3 ~/backlog/trello.py card-move "$CARD_ID" test`
@@ -98,25 +122,42 @@ Use the Workflow tool with three phases:
 
 **Phase 3 — Release** (label: `releaser`)
 - Only runs if Test phase passed
-- Pushes the commit (`git push`)
+- Pushes the commit (`git push`) — `unset GITHUB_TOKEN` first
 - Runs deploy command if the project has one
+- If `ISSUE_NUMBER` is set and issue is still open, close it:
+  `unset GITHUB_TOKEN && gh issue close "$ISSUE_NUMBER" --repo "$REPO" --comment "✓ Released"`
+  (The `Closes #N` in the commit message auto-closes on push to default branch — the explicit close is a belt-and-braces fallback)
 - Confirms deployment succeeded
 - Returns text containing "SUCCESS" on success, "FAILURE" on failure
 
-### Step 7 — Update the file and Trello
+### Step 7 — Update the file, Trello, and GitHub
 
 On success (all phases passed):
-```
+```bash
+# todo.md
 - [ ] [project] feature  →  - [x] [project] feature
+
+# Trello
 python3 ~/backlog/trello.py card-move "$CARD_ID" done
 python3 ~/backlog/trello.py card-comment "$CARD_ID" "✓ Released"
+
+# GitHub (if repo exists — issue already closed via commit or explicit close in releaser)
+# No extra action needed on success
 ```
 
 On failure (any phase failed):
-```
+```bash
+# todo.md
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
+
+# Trello
 python3 ~/backlog/trello.py card-move "$CARD_ID" blocked
 python3 ~/backlog/trello.py card-comment "$CARD_ID" "✗ Failed: <reason>"
+
+# GitHub (if ISSUE_NUMBER is set)
+unset GITHUB_TOKEN
+gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "✗ Backlog pipeline failed: <reason>"
+# Leave issue open so it can be retried or fixed manually
 ```
 
 ### Step 8 — Notify
