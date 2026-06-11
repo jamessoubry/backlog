@@ -238,7 +238,7 @@ Agent(
   description: "Wait for PR <REPO>#<PR_NUMBER> to merge, then deploy",
   run_in_background: true,
   prompt: """
-    You are a merge-watcher. Wait for PR #<PR_NUMBER> in <REPO> to be resolved, then
+    You are a merge-watcher. Poll until PR #<PR_NUMBER> in <REPO> is resolved, then
     complete the backlog release.
 
     Context:
@@ -250,18 +250,20 @@ Agent(
       trello_card: <CARD_ID>
       feature:     <FEATURE>
       file:        <FILE_PATH>      (empty if GitHub issues mode)
-      timeout_sec: <PR_TIMEOUT>     (from .backlog.yml, default 86400)
       poll_sec:    <PR_POLL_INTERVAL> (from .backlog.yml, default 300)
+      max_polls:   <PR_TIMEOUT / PR_POLL_INTERVAL> (default 288 = 24h)
 
     Steps:
-    1. Use the Monitor tool to watch:
-         bash -c 'until unset GITHUB_TOKEN && gh pr view <PR_NUMBER> --repo <REPO> --json state --jq ".state != \"OPEN\"" | grep -q true; do sleep <poll_sec>; done && echo done'
-       Monitor fires when the PR leaves OPEN state (merged or closed).
+    1. Poll until state changes:
+         for i in $(seq 1 <max_polls>); do
+           STATE=$(unset GITHUB_TOKEN && gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state')
+           [ "$STATE" != "OPEN" ] && break
+           sleep <poll_sec>
+         done
 
-    2. Check the final state:
-         unset GITHUB_TOKEN && gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state'
+    2. Act on $STATE:
 
-    3a. If MERGED:
+    If MERGED:
         - cd <project_dir> && <deploy_cmd>
         - python3 ~/backlog/trello.py card-move <CARD_ID> done
         - python3 ~/backlog/trello.py card-comment <CARD_ID> "✓ Released"
@@ -269,7 +271,7 @@ Agent(
         - If file set: update [ ] → [x] for the feature line
         - bash ~/main/scripts/notify-main.sh "Backlog [<project>]: <feature> — ✓ released"
 
-    3b. If CLOSED without merge OR Monitor timed out (>timeout_sec elapsed):
+    If CLOSED (no merge) or max_polls exhausted:
         - python3 ~/backlog/trello.py card-move <CARD_ID> blocked
         - python3 ~/backlog/trello.py card-comment <CARD_ID> "✗ PR closed without merge"
         - If issue set: unset GITHUB_TOKEN && gh issue edit <ISSUE_NUMBER> --repo <REPO> --add-label failed --remove-label in-progress
