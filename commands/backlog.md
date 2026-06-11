@@ -1,18 +1,32 @@
 ---
 name: backlog
-description: Process a markdown todo list one item at a time, implementing each as a software feature using coder/tester/releaser subagents, then self-pacing to the next item via ScheduleWakeup.
+description: Process a backlog one item at a time — from a markdown file or a GitHub repo's issues. Implements each as a software feature using coder/tester/releaser subagents, then self-paces to the next item via ScheduleWakeup.
 user_invocable: true
 ---
 
 # /backlog
 
-Work through a markdown todo list one feature at a time. Each tick: pick the first unchecked item, implement it with subagents, mark it done, then schedule the next tick automatically.
+Work through a backlog one feature at a time. Each tick: pick the next item, implement it with subagents, mark it done, then schedule the next tick automatically.
 
 ## Arguments
 
-`/backlog <filepath>` — e.g., `/backlog ~/main/backlog.md`
+Two modes:
 
-## Todo file format
+**File mode** — markdown backlog file:
+```
+/backlog ~/main/backlog.md
+/backlog ~/clawband/backlog.md
+```
+
+**GitHub issues mode** — repo's open issues labelled `backlog`, ordered by priority:
+```
+/backlog jamessoubry/clawband
+/backlog jamessoubry/gavel
+```
+
+The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but not a file path starting with `~` or `/`).
+
+## File mode — backlog.md format
 
 ```markdown
 - [ ] [project] Feature description
@@ -23,6 +37,17 @@ Work through a markdown todo list one feature at a time. Each tick: pick the fir
 ```
 
 `[ ]` = pending · `[x]` = done · `[!]` = failed (both are skipped on future runs)
+
+## GitHub issues mode — issue conventions
+
+- Issues must have the `backlog` label to be queued
+- Priority ordering: `P0` → `P1` → `P2` → unlabelled (within each priority, oldest issue first)
+- State is tracked via labels and issue open/closed state:
+  - Queued: open + `backlog` label
+  - In progress: open + `backlog` + `in-progress` labels
+  - Done: closed (backlog label removed)
+  - Failed: open + `backlog` + `failed` label (stays open for manual retry/fix)
+- The project is inferred from the repo name (e.g. `jamessoubry/clawband` → `clawband`)
 
 ## Project map
 
@@ -40,64 +65,68 @@ Work through a markdown todo list one feature at a time. Each tick: pick the fir
 
 ## Instructions
 
-### Step 1 — Read the file
+### Step 1 — Find the next item
 
-Read the file at the path given in the arguments. Find the **first** line matching `- [ ]`.
+**File mode:**
+Read the file. Find the **first** line matching `- [ ]`.
+If none exist: `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
 
-If no `[ ]` items exist:
-- Run `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"`
-- Stop. Do NOT call ScheduleWakeup — the list is empty and scheduling would create an infinite loop.
+**GitHub issues mode:**
+```bash
+unset GITHUB_TOKEN
+# Fetch open issues with backlog label, sorted by priority then issue number
+ISSUE_JSON=$(gh issue list --repo "<owner/repo>" \
+  --label backlog --state open --limit 100 \
+  --json number,title,labels \
+  --jq '
+    def priority:
+      .labels | map(.name) |
+      if contains(["P0"]) then 0
+      elif contains(["P1"]) then 1
+      elif contains(["P2"]) then 2
+      else 3 end;
+    sort_by([priority, .number]) | .[0]
+  ')
+```
+If result is null/empty: `bash ~/main/scripts/notify-main.sh "Backlog complete: no open backlog issues in <repo>"` then STOP.
+
+Extract `ISSUE_NUMBER` and `ISSUE_TITLE` from the JSON.
 
 ### Step 2 — Schedule the next tick
 
-Only reached if a `[ ]` item was found in Step 1. Call ScheduleWakeup now:
+Only reached if an item was found in Step 1. Call ScheduleWakeup now:
 - `delaySeconds: 270`
-- `prompt: "/backlog <filepath>"` — same file path as the current invocation
+- `prompt: "/backlog <same argument as current invocation>"` — file path or `owner/repo`
 
-This ensures recovery if the session exhausts the rolling window mid-tick. The next wakeup
-will re-read the file; if the current item is still `[ ]` it was not completed and will be
-retried. If it was already marked `[x]` or `[!]`, it will be skipped.
+This ensures recovery if the session exhausts the rolling window mid-tick.
 
 ### Step 3 — Parse the item
 
-Extract:
-- `project` — from `[tag]` in the item text, or infer from the description
-- `feature` — the description after the tag
+**File mode:** extract `project` from `[tag]` and `feature` from the description.
+
+**GitHub issues mode:** `project` = repo name (last segment of `owner/repo`). `feature` = issue title. `ISSUE_NUMBER` already set in Step 1.
 
 ### Step 4 — Trello: create or find card, move to In Progress
 
 ```bash
-# Find existing card (in case of retry)
 CARD_ID=$(python3 ~/backlog/trello.py card-find "<feature>")
 if [ "$CARD_ID" = "NOT_FOUND" ]; then
   CARD_ID=$(python3 ~/backlog/trello.py card-create "<feature>" "<project>")
 fi
-# Move to In Progress
 python3 ~/backlog/trello.py card-move "$CARD_ID" in_progress
 ```
 
-### Step 4b — GitHub: create or find issue (projects with repos only)
+### Step 4b — GitHub issue: set in-progress label
 
-Look up the GitHub repo for the project from the project map. If the project has no repo (`—`), skip this step entirely — `ISSUE_NUMBER` stays empty.
+**File mode:** look up `REPO` from the project map. If `—`, skip. Otherwise find or create an issue as before (search by feature title, create if not found). Then add `in-progress` label.
 
+**GitHub issues mode:** `REPO` and `ISSUE_NUMBER` already known from Step 1. Just add the label:
 ```bash
-unset GITHUB_TOKEN   # stale env var overrides stored gh CLI token
-REPO="jamessoubry/<project>"   # from project map
-
-# Find an existing open issue (in case of retry)
-ISSUE_NUMBER=$(gh issue list --repo "$REPO" --state open \
-  --search "<feature>" --json number --jq '.[0].number // empty' 2>/dev/null)
-
-# Create if not found
-if [ -z "$ISSUE_NUMBER" ]; then
-  ISSUE_NUMBER=$(gh issue create --repo "$REPO" \
-    --title "<feature>" \
-    --body "Backlog item — automated via /backlog" \
-    --json number --jq '.number')
-fi
+unset GITHUB_TOKEN
+gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "in-progress"
 ```
 
-Pass `ISSUE_NUMBER` and `REPO` into the workflow so the coder and releaser can use them.
+Pass `ISSUE_NUMBER` and `REPO` into the workflow for coder and releaser.
 
 ### Step 5 — Read project context
 
@@ -124,40 +153,44 @@ Use the Workflow tool with three phases:
 - Only runs if Test phase passed
 - Pushes the commit (`git push`) — `unset GITHUB_TOKEN` first
 - Runs deploy command if the project has one
-- If `ISSUE_NUMBER` is set and issue is still open, close it:
-  `unset GITHUB_TOKEN && gh issue close "$ISSUE_NUMBER" --repo "$REPO" --comment "✓ Released"`
-  (The `Closes #N` in the commit message auto-closes on push to default branch — the explicit close is a belt-and-braces fallback)
 - Confirms deployment succeeded
 - Returns text containing "SUCCESS" on success, "FAILURE" on failure
 
-### Step 7 — Update the file, Trello, and GitHub
+### Step 7 — Update state, Trello, and GitHub
 
 On success (all phases passed):
 ```bash
-# backlog.md
+# File mode: mark done in file
 - [ ] [project] feature  →  - [x] [project] feature
 
 # Trello
 python3 ~/backlog/trello.py card-move "$CARD_ID" done
 python3 ~/backlog/trello.py card-comment "$CARD_ID" "✓ Released"
 
-# GitHub (if repo exists — issue already closed via commit or explicit close in releaser)
-# No extra action needed on success
+# GitHub (both modes — issue closed by Closes #N in commit, belt-and-braces explicit close)
+unset GITHUB_TOKEN
+gh issue close "$ISSUE_NUMBER" --repo "$REPO" \
+  --comment "✓ Released" 2>/dev/null || true
+# Remove in-progress label (close removes it implicitly but be explicit)
+gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+  --remove-label "in-progress" --remove-label "backlog" 2>/dev/null || true
 ```
 
 On failure (any phase failed):
 ```bash
-# backlog.md
+# File mode: mark failed in file
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
 
 # Trello
 python3 ~/backlog/trello.py card-move "$CARD_ID" blocked
 python3 ~/backlog/trello.py card-comment "$CARD_ID" "✗ Failed: <reason>"
 
-# GitHub (if ISSUE_NUMBER is set)
+# GitHub (both modes — leave issue open, add failed label, remove in-progress)
 unset GITHUB_TOKEN
-gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "✗ Backlog pipeline failed: <reason>"
-# Leave issue open so it can be retried or fixed manually
+gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
+  --body "✗ Backlog pipeline failed: <reason>"
+gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+  --add-label "failed" --remove-label "in-progress" 2>/dev/null || true
 ```
 
 ### Step 8 — Notify
@@ -170,15 +203,13 @@ bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — ✗ failed:
 
 ## Rate limit recovery
 
-ScheduleWakeup is called at the very start of each tick (Step 1), before any work begins.
-This means a next-tick wakeup is always queued, even if the current tick is killed mid-flight
-by an exhausted rolling window. On recovery the file is re-read fresh; incomplete items
-(still `[ ]`) are retried, completed items (`[x]`/`[!]`) are skipped. The pipeline is
-idempotent by design.
+ScheduleWakeup is called at the very start (Step 2), before any work begins. If the session is killed mid-tick, the wakeup fires and retries. The pipeline is idempotent:
+- File mode: item still `[ ]` → retry; `[x]`/`[!]` → skip
+- GitHub issues mode: issue still open with `backlog` label → retry; closed or `failed` label skips naturally via the priority sort (failed items keep `backlog` label — manually remove it to drop from queue, or fix and remove `failed`)
 
 ## Constraints
 
 - One item per tick — never process multiple items in one invocation
-- Never deploy without passing tests — mark `[!]` and move on if tests fail
+- Never deploy without passing tests — mark `[!]`/`failed` and move on if tests fail
 - Always notify on every outcome (success or failure)
 - One commit per feature item, never squash
