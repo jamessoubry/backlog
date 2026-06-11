@@ -64,11 +64,23 @@ Extract:
 - `project` — from `[tag]` in the item text, or infer from the description
 - `feature` — the description after the tag
 
-### Step 4 — Read project context
+### Step 4 — Trello: create or find card, move to In Progress
+
+```bash
+# Find existing card (in case of retry)
+CARD_ID=$(python3 ~/backlog/trello.py card-find "<feature>")
+if [ "$CARD_ID" = "NOT_FOUND" ]; then
+  CARD_ID=$(python3 ~/backlog/trello.py card-create "<feature>" "<project>")
+fi
+# Move to In Progress
+python3 ~/backlog/trello.py card-move "$CARD_ID" in_progress
+```
+
+### Step 5 — Read project context
 
 Read `<project_dir>/CLAUDE.md` to understand architecture, build commands, test commands, and deploy pipeline before dispatching agents.
 
-### Step 5 — Run the feature pipeline
+### Step 6 — Run the feature pipeline
 
 Use the Workflow tool with three phases:
 
@@ -79,6 +91,7 @@ Use the Workflow tool with three phases:
 - Commits with a clear message but does NOT push yet
 
 **Phase 2 — Test** (label: `tester`)
+- Before running tests: `python3 ~/backlog/trello.py card-move "$CARD_ID" test`
 - Agent runs the project's test suite
 - Verifies new tests pass and no regressions introduced
 - If tests fail: return failure details, abort pipeline
@@ -90,19 +103,23 @@ Use the Workflow tool with three phases:
 - Confirms deployment succeeded
 - Returns text containing "SUCCESS" on success, "FAILURE" on failure
 
-### Step 6 — Update the file
+### Step 7 — Update the file and Trello
 
 On success (all phases passed):
 ```
 - [ ] [project] feature  →  - [x] [project] feature
+python3 ~/backlog/trello.py card-move "$CARD_ID" done
+python3 ~/backlog/trello.py card-comment "$CARD_ID" "✓ Released"
 ```
 
 On failure (any phase failed):
 ```
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
+python3 ~/backlog/trello.py card-move "$CARD_ID" blocked
+python3 ~/backlog/trello.py card-comment "$CARD_ID" "✗ Failed: <reason>"
 ```
 
-### Step 7 — Notify
+### Step 8 — Notify
 
 ```bash
 bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — ✓ released"
