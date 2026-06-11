@@ -40,23 +40,23 @@ Work through a markdown todo list one feature at a time. Each tick: pick the fir
 
 ## Instructions
 
-### Step 1 — Schedule the next tick immediately
+### Step 1 — Read the file
 
-Before doing any work, call ScheduleWakeup:
+Read the file at the path given in the arguments. Find the **first** line matching `- [ ]`.
+
+If no `[ ]` items exist:
+- Run `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"`
+- Stop. Do NOT call ScheduleWakeup — the list is empty and scheduling would create an infinite loop.
+
+### Step 2 — Schedule the next tick
+
+Only reached if a `[ ]` item was found in Step 1. Call ScheduleWakeup now:
 - `delaySeconds: 270`
 - `prompt: "/backlog <filepath>"` — same file path as the current invocation
 
 This ensures recovery if the session exhausts the rolling window mid-tick. The next wakeup
 will re-read the file; if the current item is still `[ ]` it was not completed and will be
 retried. If it was already marked `[x]` or `[!]`, it will be skipped.
-
-### Step 2 — Read the file
-
-Read the file at the path given in the arguments. Find the **first** line matching `- [ ]`.
-
-If no `[ ]` items exist:
-- Run `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"`
-- Stop (the wakeup scheduled in Step 1 will fire but exit cleanly finding no pending items).
 
 ### Step 3 — Parse the item
 
