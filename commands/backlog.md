@@ -61,6 +61,9 @@ repo: jamessoubry/clawband      # GitHub repo (optional — skip GitHub steps if
 deploy: cargo build --release   # deploy command (overrides fallback map)
 label: backlog                  # issue label to filter on (default: backlog)
 priority: [P0, P1, P2]         # priority label order, high→low (default)
+pr_required: false              # if true: push branch + open PR instead of pushing to main; poll for merge before deploying
+pr_poll_interval: 300           # seconds between merge checks (default: 300)
+pr_timeout: 86400               # seconds before giving up on a PR (default: 86400 = 24h)
 ```
 
 When reading project config, check `<project_dir>/.backlog.yml` first. If it exists, use those values. If it doesn't exist or a field is missing, fall back to the project map below.
@@ -183,15 +186,23 @@ Use the Workflow tool with three phases:
 - If tests fail: return failure details, abort pipeline
 
 **Phase 3 — Release** (label: `releaser`)
-- Only runs if Test phase passed
-- Pushes the commit (`git push`) — `unset GITHUB_TOKEN` first
-- Runs deploy command if the project has one
-- Confirms deployment succeeded
-- Returns text containing "SUCCESS" on success, "FAILURE" on failure
+
+Only runs if Test phase passed. Behaviour depends on `pr_required` from `.backlog.yml`:
+
+**`pr_required: false` (default):**
+- `unset GITHUB_TOKEN && git push` direct to main
+- Run deploy command
+- Returns "SUCCESS: deployed" or "FAILURE: <reason>"
+
+**`pr_required: true`:**
+- Push to a feature branch: `git checkout -b backlog/<slug> && git push -u origin backlog/<slug>`
+- Open a PR: `unset GITHUB_TOKEN && gh pr create --repo "$REPO" --title "<feature>" --body "Closes #$ISSUE_NUMBER\n\nAutomated via /backlog" --base main`
+- Return "PR_PENDING: <pr_number>" — do NOT deploy yet
+- The deploy happens after the PR is merged (see Step 7b)
 
 ### Step 7 — Update state, Trello, and GitHub
 
-On success (all phases passed):
+On **SUCCESS** (pr_required false, all phases passed):
 ```bash
 # File mode: mark done in file
 - [ ] [project] feature  →  - [x] [project] feature
@@ -209,7 +220,36 @@ gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
   --remove-label "in-progress" --remove-label "backlog" 2>/dev/null || true
 ```
 
-On failure (any phase failed):
+On **PR_PENDING** (pr_required true, PR opened successfully):
+```bash
+# File mode: leave as [ ] — not done until merged and deployed
+# Trello: move to a "review" list if available, else leave in_progress
+python3 ~/backlog/trello.py card-comment "$CARD_ID" "PR #<pr_number> opened — awaiting merge"
+
+# GitHub: PR is open, issue stays in-progress
+# Notify
+bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — PR #<pr_number> opened, awaiting merge"
+```
+
+Then schedule the merge-watcher via ScheduleWakeup:
+```
+ScheduleWakeup(
+  delaySeconds: <pr_poll_interval>,   # from .backlog.yml, default 300
+  prompt: "Check if PR <REPO>#<PR_NUMBER> is merged.
+    Context: project=<project> feature=<feature> card=<CARD_ID> issue=<ISSUE_NUMBER>
+    deploy_cmd=<DEPLOY_CMD> file=<FILE_PATH_OR_EMPTY> attempts_left=<MAX_ATTEMPTS>
+    If merged: run deploy_cmd in <project_dir>, then mark Trello card done, close GitHub
+    issue with comment '✓ Released', update file [ ]→[x] if file mode, notify
+    'Backlog [project]: <feature> — ✓ released'.
+    If still open and attempts_left > 0: schedule another check (same prompt, attempts_left-1).
+    If attempts_left == 0 or PR closed without merge: mark Trello blocked, add 'failed' label
+    to issue, notify '✗ PR timed out or closed without merge'."
+)
+```
+
+`MAX_ATTEMPTS = pr_timeout / pr_poll_interval` (e.g. 86400/300 = 288 attempts = 24h max wait).
+
+On **FAILURE** (any phase failed):
 ```bash
 # File mode: mark failed in file
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
