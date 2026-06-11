@@ -10,7 +10,7 @@ Work through a markdown todo list one feature at a time. Each tick: pick the fir
 
 ## Arguments
 
-`/backlog <filepath>` — e.g., `/backlog ~/main/todo.md`
+`/backlog <filepath>` — e.g., `/backlog ~/main/backlog.md`
 
 ## Todo file format
 
@@ -33,7 +33,7 @@ Work through a markdown todo list one feature at a time. Each tick: pick the fir
 | `gavel` | `/home/ubuntu/gavel` | `./deploy.sh` | `jamessoubry/gavel` |
 | `replenish` | `/home/ubuntu/replenish` | `./deploy.sh` | — |
 | `filemover` | `/home/ubuntu/filemover` | CodeBuild via `./build.sh` | — |
-| `polybot` | `/home/ubuntu/polybot` | `./deploy.sh --deploy` | `jamessoubry/polybot` |
+| `polybot` | `/home/ubuntu/polybot` | `./deploy.sh --deploy` | — |
 | `shortlink` | `/home/ubuntu/shortlink` | `./deploy.sh` | — |
 | `oneeye` | `/home/ubuntu/oneeye` | CodeBuild via `./build.sh` | — |
 | `clawband` | `/home/ubuntu/clawband` | `cargo build --release` + install | `jamessoubry/clawband` |
@@ -134,7 +134,7 @@ Use the Workflow tool with three phases:
 
 On success (all phases passed):
 ```bash
-# todo.md
+# backlog.md
 - [ ] [project] feature  →  - [x] [project] feature
 
 # Trello
@@ -147,7 +147,7 @@ python3 ~/backlog/trello.py card-comment "$CARD_ID" "✓ Released"
 
 On failure (any phase failed):
 ```bash
-# todo.md
+# backlog.md
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
 
 # Trello
