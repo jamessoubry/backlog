@@ -231,23 +231,55 @@ python3 ~/backlog/trello.py card-comment "$CARD_ID" "PR #<pr_number> opened — 
 bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — PR #<pr_number> opened, awaiting merge"
 ```
 
-Then schedule the merge-watcher via ScheduleWakeup:
+Then spawn a **background merge-watcher agent** with all context it needs to finish the job:
+
 ```
-ScheduleWakeup(
-  delaySeconds: <pr_poll_interval>,   # from .backlog.yml, default 300
-  prompt: "Check if PR <REPO>#<PR_NUMBER> is merged.
-    Context: project=<project> feature=<feature> card=<CARD_ID> issue=<ISSUE_NUMBER>
-    deploy_cmd=<DEPLOY_CMD> file=<FILE_PATH_OR_EMPTY> attempts_left=<MAX_ATTEMPTS>
-    If merged: run deploy_cmd in <project_dir>, then mark Trello card done, close GitHub
-    issue with comment '✓ Released', update file [ ]→[x] if file mode, notify
-    'Backlog [project]: <feature> — ✓ released'.
-    If still open and attempts_left > 0: schedule another check (same prompt, attempts_left-1).
-    If attempts_left == 0 or PR closed without merge: mark Trello blocked, add 'failed' label
-    to issue, notify '✗ PR timed out or closed without merge'."
+Agent(
+  description: "Wait for PR <REPO>#<PR_NUMBER> to merge, then deploy",
+  run_in_background: true,
+  prompt: """
+    You are a merge-watcher. Wait for PR #<PR_NUMBER> in <REPO> to be resolved, then
+    complete the backlog release.
+
+    Context:
+      project_dir: <PROJECT_DIR>
+      deploy_cmd:  <DEPLOY_CMD>
+      repo:        <REPO>
+      pr_number:   <PR_NUMBER>
+      issue:       <ISSUE_NUMBER>   (empty if no GitHub issue)
+      trello_card: <CARD_ID>
+      feature:     <FEATURE>
+      file:        <FILE_PATH>      (empty if GitHub issues mode)
+      timeout_sec: <PR_TIMEOUT>     (from .backlog.yml, default 86400)
+      poll_sec:    <PR_POLL_INTERVAL> (from .backlog.yml, default 300)
+
+    Steps:
+    1. Use the Monitor tool to watch:
+         bash -c 'until unset GITHUB_TOKEN && gh pr view <PR_NUMBER> --repo <REPO> --json state --jq ".state != \"OPEN\"" | grep -q true; do sleep <poll_sec>; done && echo done'
+       Monitor fires when the PR leaves OPEN state (merged or closed).
+
+    2. Check the final state:
+         unset GITHUB_TOKEN && gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state'
+
+    3a. If MERGED:
+        - cd <project_dir> && <deploy_cmd>
+        - python3 ~/backlog/trello.py card-move <CARD_ID> done
+        - python3 ~/backlog/trello.py card-comment <CARD_ID> "✓ Released"
+        - If issue set: unset GITHUB_TOKEN && gh issue close <ISSUE_NUMBER> --repo <REPO> --comment "✓ Released"
+        - If file set: update [ ] → [x] for the feature line
+        - bash ~/main/scripts/notify-main.sh "Backlog [<project>]: <feature> — ✓ released"
+
+    3b. If CLOSED without merge OR Monitor timed out (>timeout_sec elapsed):
+        - python3 ~/backlog/trello.py card-move <CARD_ID> blocked
+        - python3 ~/backlog/trello.py card-comment <CARD_ID> "✗ PR closed without merge"
+        - If issue set: unset GITHUB_TOKEN && gh issue edit <ISSUE_NUMBER> --repo <REPO> --add-label failed --remove-label in-progress
+        - If file set: update [ ] → [!] <feature> — PR closed without merge
+        - bash ~/main/scripts/notify-main.sh "Backlog [<project>]: <feature> — ✗ PR closed without merge"
+  """
 )
 ```
 
-`MAX_ATTEMPTS = pr_timeout / pr_poll_interval` (e.g. 86400/300 = 288 attempts = 24h max wait).
+The background agent handles completion entirely — the main backlog tick ends here for `pr_required` items. The item stays `[ ]` / `in-progress` until the watcher finishes.
 
 On **FAILURE** (any phase failed):
 ```bash
