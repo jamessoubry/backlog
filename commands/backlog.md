@@ -26,6 +26,8 @@ Two modes:
 
 The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but not a file path starting with `~` or `/`).
 
+**No-argument mode** — if no argument is provided, look for a `.backlog.yml` in the current working directory. If found and it contains a `repo:` field, use that as the `owner/repo` argument automatically. If no `.backlog.yml` or no `repo:` field, print usage and stop.
+
 ## File mode — backlog.md format
 
 ```markdown
