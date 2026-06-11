@@ -35,10 +35,13 @@ The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but 
 - [ ] [gavel] Add rate limiting to the public API
 - [ ] [mund] Fix timeout in LangGraph orchestrator
 - [x] [polybot] Already done — skipped
-- [!] [gavel] Failed item — skipped, failure note inline
+- [!] [gavel] Failed item — PR closed without merge / test failure / reason
+- [~] [clawband] PR pending — PR #42 jamessoubry/clawband
 ```
 
-`[ ]` = pending · `[x]` = done · `[!]` = failed (both are skipped on future runs)
+`[ ]` = pending · `[x]` = done · `[!]` = failed · `[~]` = PR open, awaiting merge
+
+`[~]` items are not re-implemented — on the next run `/backlog` checks if the PR merged and either deploys or reminds you.
 
 ## GitHub issues mode — issue conventions
 
@@ -47,6 +50,7 @@ The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but 
 - State is tracked via labels and issue open/closed state:
   - Queued: open + `backlog` label
   - In progress: open + `backlog` + `in-progress` labels
+  - PR pending: open + `backlog` + `pr-pending` label (no polling — re-run `/backlog` after merging)
   - Done: closed (backlog label removed)
   - Failed: open + `backlog` + `failed` label (stays open for manual retry/fix)
 - The project is inferred from the repo name (e.g. `jamessoubry/clawband` → `clawband`)
@@ -87,8 +91,20 @@ When reading project config, check `<project_dir>/.backlog.yml` first. If it exi
 ### Step 1 — Find the next item
 
 **File mode:**
-Read the file. Find the **first** line matching `- [ ]`.
-If none exist: `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
+Read the file. Check for `[~]` lines first (PR pending), then `[ ]` lines.
+
+If a `[~]` line exists:
+```bash
+# Extract PR number and repo from the line, e.g. "PR #42 jamessoubry/clawband"
+unset GITHUB_TOKEN
+STATE=$(gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state')
+```
+- If `MERGED`: proceed to deploy (skip implement/test — jump straight to release/deploy step), then mark `[~]` → `[x]`
+- If `OPEN`: `bash ~/main/scripts/notify-main.sh "Backlog [project]: PR #N still open — merge it then re-run /backlog"` then STOP
+- If `CLOSED`: mark `[~]` → `[!] — PR closed without merge` then continue to next item
+
+If no `[~]` exists, find the **first** `[ ]` line.
+If neither exists: `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
 
 **GitHub issues mode:**
 
@@ -197,8 +213,7 @@ Only runs if Test phase passed. Behaviour depends on `pr_required` from `.backlo
 **`pr_required: true`:**
 - Push to a feature branch: `git checkout -b backlog/<slug> && git push -u origin backlog/<slug>`
 - Open a PR: `unset GITHUB_TOKEN && gh pr create --repo "$REPO" --title "<feature>" --body "Closes #$ISSUE_NUMBER\n\nAutomated via /backlog" --base main`
-- Return "PR_PENDING: <pr_number>" — do NOT deploy yet
-- The deploy happens after the PR is merged (see Step 7b)
+- Return "PR_PENDING: <pr_number>" — do NOT deploy yet, no background agent, no polling
 
 ### Step 7 — Update state, Trello, and GitHub
 
@@ -222,66 +237,21 @@ gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
 
 On **PR_PENDING** (pr_required true, PR opened successfully):
 ```bash
-# File mode: leave as [ ] — not done until merged and deployed
-# Trello: move to a "review" list if available, else leave in_progress
-python3 ~/backlog/trello.py card-comment "$CARD_ID" "PR #<pr_number> opened — awaiting merge"
+# File mode: mark as [~] with PR reference
+- [ ] [project] feature  →  - [~] [project] feature — PR #<pr_number> <REPO>
 
-# GitHub: PR is open, issue stays in-progress
-# Notify
-bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — PR #<pr_number> opened, awaiting merge"
+# GitHub issues mode: swap in-progress for pr-pending label
+unset GITHUB_TOKEN
+gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "pr-pending" --remove-label "in-progress"
+
+# Trello
+python3 ~/backlog/trello.py card-comment "$CARD_ID" "PR #<pr_number> opened — merge then re-run /backlog"
+
+# Notify — tell user what to do next
+bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — PR #<pr_number> open. Merge it then re-run /backlog."
 ```
 
-Then spawn a **background merge-watcher agent** with all context it needs to finish the job:
-
-```
-Agent(
-  description: "Wait for PR <REPO>#<PR_NUMBER> to merge, then deploy",
-  run_in_background: true,
-  prompt: """
-    You are a merge-watcher. Poll until PR #<PR_NUMBER> in <REPO> is resolved, then
-    complete the backlog release.
-
-    Context:
-      project_dir: <PROJECT_DIR>
-      deploy_cmd:  <DEPLOY_CMD>
-      repo:        <REPO>
-      pr_number:   <PR_NUMBER>
-      issue:       <ISSUE_NUMBER>   (empty if no GitHub issue)
-      trello_card: <CARD_ID>
-      feature:     <FEATURE>
-      file:        <FILE_PATH>      (empty if GitHub issues mode)
-      poll_sec:    <PR_POLL_INTERVAL> (from .backlog.yml, default 300)
-      max_polls:   <PR_TIMEOUT / PR_POLL_INTERVAL> (default 288 = 24h)
-
-    Steps:
-    1. Poll until state changes:
-         for i in $(seq 1 <max_polls>); do
-           STATE=$(unset GITHUB_TOKEN && gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state')
-           [ "$STATE" != "OPEN" ] && break
-           sleep <poll_sec>
-         done
-
-    2. Act on $STATE:
-
-    If MERGED:
-        - cd <project_dir> && <deploy_cmd>
-        - python3 ~/backlog/trello.py card-move <CARD_ID> done
-        - python3 ~/backlog/trello.py card-comment <CARD_ID> "✓ Released"
-        - If issue set: unset GITHUB_TOKEN && gh issue close <ISSUE_NUMBER> --repo <REPO> --comment "✓ Released"
-        - If file set: update [ ] → [x] for the feature line
-        - bash ~/main/scripts/notify-main.sh "Backlog [<project>]: <feature> — ✓ released"
-
-    If CLOSED (no merge) or max_polls exhausted:
-        - python3 ~/backlog/trello.py card-move <CARD_ID> blocked
-        - python3 ~/backlog/trello.py card-comment <CARD_ID> "✗ PR closed without merge"
-        - If issue set: unset GITHUB_TOKEN && gh issue edit <ISSUE_NUMBER> --repo <REPO> --add-label failed --remove-label in-progress
-        - If file set: update [ ] → [!] <feature> — PR closed without merge
-        - bash ~/main/scripts/notify-main.sh "Backlog [<project>]: <feature> — ✗ PR closed without merge"
-  """
-)
-```
-
-The background agent handles completion entirely — the main backlog tick ends here for `pr_required` items. The item stays `[ ]` / `in-progress` until the watcher finishes.
+Zero polling. Zero ongoing cost. The next `/backlog` run detects the `[~]` / `pr-pending` state, checks PR in one API call, and deploys if merged.
 
 On **FAILURE** (any phase failed):
 ```bash
@@ -312,7 +282,7 @@ bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — ✗ failed:
 
 ScheduleWakeup is called at the very start (Step 2), before any work begins. If the session is killed mid-tick, the wakeup fires and retries. The pipeline is idempotent:
 - File mode: item still `[ ]` → retry; `[x]`/`[!]` → skip
-- GitHub issues mode: issue still open with `backlog` label → retry; closed or `failed` label skips naturally via the priority sort (failed items keep `backlog` label — manually remove it to drop from queue, or fix and remove `failed`)
+- GitHub issues mode: issue still open with `backlog` label → retry; `pr-pending` label → check PR state (deploy if merged, remind if open); closed or `failed` label skips naturally via the priority sort
 
 ## Constraints
 
