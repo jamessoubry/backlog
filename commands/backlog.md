@@ -145,17 +145,7 @@ This ensures recovery if the session exhausts the rolling window mid-tick.
 
 **GitHub issues mode:** `project` = repo name (last segment of `owner/repo`). `feature` = issue title. `ISSUE_NUMBER` already set in Step 1.
 
-### Step 4 — Trello: create or find card, move to In Progress
-
-```bash
-CARD_ID=$(python3 ~/backlog/trello.py card-find "<feature>")
-if [ "$CARD_ID" = "NOT_FOUND" ]; then
-  CARD_ID=$(python3 ~/backlog/trello.py card-create "<feature>" "<project>")
-fi
-python3 ~/backlog/trello.py card-move "$CARD_ID" in_progress
-```
-
-### Step 4b — GitHub issue: set in-progress label
+### Step 4 — GitHub issue: set in-progress label
 
 **File mode:** look up `REPO` from the project map. If `—`, skip. Otherwise find or create an issue as before (search by feature title, create if not found). Then add `in-progress` label.
 
@@ -196,7 +186,6 @@ Use the Workflow tool with three phases:
 - If `ISSUE_NUMBER` is set, append `Closes <REPO>#<ISSUE_NUMBER>` as a footer line in the commit message
 
 **Phase 2 — Test** (label: `tester`)
-- Before running tests: `python3 ~/backlog/trello.py card-move "$CARD_ID" test`
 - Agent runs the project's test suite
 - Verifies new tests pass and no regressions introduced
 - If tests fail: return failure details, abort pipeline
@@ -215,22 +204,16 @@ Only runs if Test phase passed. Behaviour depends on `pr_required` from `.backlo
 - Open a PR: `unset GITHUB_TOKEN && gh pr create --repo "$REPO" --title "<feature>" --body "Closes #$ISSUE_NUMBER\n\nAutomated via /backlog" --base main`
 - Return "PR_PENDING: <pr_number>" — do NOT deploy yet, no background agent, no polling
 
-### Step 7 — Update state, Trello, and GitHub
+### Step 7 — Update state
 
 On **SUCCESS** (pr_required false, all phases passed):
 ```bash
-# File mode: mark done in file
+# File mode: mark done
 - [ ] [project] feature  →  - [x] [project] feature
 
-# Trello
-python3 ~/backlog/trello.py card-move "$CARD_ID" done
-python3 ~/backlog/trello.py card-comment "$CARD_ID" "✓ Released"
-
-# GitHub (both modes — issue closed by Closes #N in commit, belt-and-braces explicit close)
+# GitHub (both modes)
 unset GITHUB_TOKEN
-gh issue close "$ISSUE_NUMBER" --repo "$REPO" \
-  --comment "✓ Released" 2>/dev/null || true
-# Remove in-progress label (close removes it implicitly but be explicit)
+gh issue close "$ISSUE_NUMBER" --repo "$REPO" --comment "✓ Released" 2>/dev/null || true
 gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
   --remove-label "in-progress" --remove-label "backlog" 2>/dev/null || true
 ```
@@ -243,29 +226,18 @@ On **PR_PENDING** (pr_required true, PR opened successfully):
 # GitHub issues mode: swap in-progress for pr-pending label
 unset GITHUB_TOKEN
 gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "pr-pending" --remove-label "in-progress"
-
-# Trello
-python3 ~/backlog/trello.py card-comment "$CARD_ID" "PR #<pr_number> opened — merge then re-run /backlog"
-
-# Notify — tell user what to do next
-bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — PR #<pr_number> open. Merge it then re-run /backlog."
 ```
 
-Zero polling. Zero ongoing cost. The next `/backlog` run detects the `[~]` / `pr-pending` state, checks PR in one API call, and deploys if merged.
+Zero polling. Zero ongoing cost. The next `/backlog` run detects `[~]` / `pr-pending`, checks PR in one API call, and deploys if merged.
 
 On **FAILURE** (any phase failed):
 ```bash
-# File mode: mark failed in file
+# File mode: mark failed
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
 
-# Trello
-python3 ~/backlog/trello.py card-move "$CARD_ID" blocked
-python3 ~/backlog/trello.py card-comment "$CARD_ID" "✗ Failed: <reason>"
-
-# GitHub (both modes — leave issue open, add failed label, remove in-progress)
+# GitHub (both modes)
 unset GITHUB_TOKEN
-gh issue comment "$ISSUE_NUMBER" --repo "$REPO" \
-  --body "✗ Backlog pipeline failed: <reason>"
+gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "✗ Failed: <reason>"
 gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
   --add-label "failed" --remove-label "in-progress" 2>/dev/null || true
 ```
