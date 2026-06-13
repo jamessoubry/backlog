@@ -46,13 +46,13 @@ The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but 
 ## GitHub issues mode — issue conventions
 
 - Issues must have the `backlog` label to be queued
-- Priority ordering: `P0` → `P1` → `P2` → unlabelled (within each priority, oldest issue first)
+- Priority ordering: `P0` → `bug` → `P1` → `P2` → unlabelled (bugs always jump the queue without needing a P-label; only use P-labels for genuine escalations)
 - State is tracked via labels and issue open/closed state:
-  - Queued: open + `backlog` label
-  - In progress: open + `backlog` + `in-progress` labels
-  - PR pending: open + `backlog` + `pr-pending` label (no polling — re-run `/backlog` after merging)
-  - Done: closed (backlog label removed)
-  - Failed: open + `backlog` + `failed` label (stays open for manual retry/fix)
+  - Queued: open + `backlog` label only
+  - In progress: open + `in-progress` label (`backlog` removed when checked out)
+  - PR pending: open + `pr-pending` label (`backlog` and `in-progress` both removed)
+  - Done: closed
+  - Failed: open + `failed` label (stays open for manual retry/fix)
 - The project is inferred from the repo name (e.g. `jamessoubry/clawband` → `clawband`)
 
 ## Project config — `.backlog.yml`
@@ -108,7 +108,23 @@ If neither exists: `bash ~/main/scripts/notify-main.sh "Backlog complete: all it
 
 **GitHub issues mode:**
 
-Load `.backlog.yml` from the project dir (inferred from repo name) to get `BACKLOG_LABEL` and `PRIORITY_LABELS`. Then:
+Load `.backlog.yml` from the project dir (inferred from repo name) to get `BACKLOG_LABEL` and `PRIORITY_LABELS`.
+
+**First: check for any pr-pending issue** (these no longer carry the `backlog` label, so need a separate query):
+
+```bash
+unset GITHUB_TOKEN
+PR_PENDING=$(gh issue list --repo "<owner/repo>" \
+  --label "pr-pending" --state open --limit 1 \
+  --json number,title --jq '.[0]')
+```
+
+If a pr-pending issue is found:
+- Extract `ISSUE_NUMBER` from it
+- Find the associated PR: `gh pr list --repo "<owner/repo>" --state all --limit 50 --json number,body,state --jq --arg n "#$ISSUE_NUMBER" '[.[] | select(.body | contains($n))] | .[0]'`
+- Check PR state and handle (MERGED → deploy + close; OPEN → notify + stop; CLOSED → remove `pr-pending` label + continue to queue)
+
+If no pr-pending issue: find the **next queued item**:
 
 ```bash
 unset GITHUB_TOKEN
@@ -121,9 +137,10 @@ ISSUE_JSON=$(gh issue list --repo "<owner/repo>" \
     def priority:
       .labels | map(.name) |
       if contains([$p0]) then 0
-      elif contains([$p1]) then 1
-      elif contains([$p2]) then 2
-      else 3 end;
+      elif contains(["bug"]) then 1
+      elif contains([$p1]) then 2
+      elif contains([$p2]) then 3
+      else 4 end;
     sort_by([priority, .number]) | .[0]
   ')
 ```
@@ -149,10 +166,10 @@ This ensures recovery if the session exhausts the rolling window mid-tick.
 
 **File mode:** look up `REPO` from the project map. If `—`, skip. Otherwise find or create an issue as before (search by feature title, create if not found). Then add `in-progress` label.
 
-**GitHub issues mode:** `REPO` and `ISSUE_NUMBER` already known from Step 1. Just add the label:
+**GitHub issues mode:** `REPO` and `ISSUE_NUMBER` already known from Step 1. Add `in-progress` and remove `backlog` together:
 ```bash
 unset GITHUB_TOKEN
-gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "in-progress"
+gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "in-progress" --remove-label "backlog"
 ```
 
 Pass `ISSUE_NUMBER` and `REPO` into the workflow for coder and releaser.
@@ -223,19 +240,19 @@ On **PR_PENDING** (pr_required true, PR opened successfully):
 # File mode: mark as [~] with PR reference
 - [ ] [project] feature  →  - [~] [project] feature — PR #<pr_number> <REPO>
 
-# GitHub issues mode: swap in-progress for pr-pending label
+# GitHub issues mode: swap in-progress for pr-pending (backlog already removed in Step 4)
 unset GITHUB_TOKEN
 gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "pr-pending" --remove-label "in-progress"
 ```
 
-Zero polling. Zero ongoing cost. The next `/backlog` run detects `[~]` / `pr-pending`, checks PR in one API call, and deploys if merged.
+Zero polling. Zero ongoing cost. The next `/backlog` run detects `pr-pending` issues via a dedicated query (Step 1), checks the PR in one API call, and deploys if merged.
 
 On **FAILURE** (any phase failed):
 ```bash
 # File mode: mark failed
 - [ ] [project] feature  →  - [!] [project] feature — <one-line reason>
 
-# GitHub (both modes)
+# GitHub (both modes) — backlog already removed in Step 4; just swap in-progress for failed
 unset GITHUB_TOKEN
 gh issue comment "$ISSUE_NUMBER" --repo "$REPO" --body "✗ Failed: <reason>"
 gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
@@ -254,7 +271,7 @@ bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — ✗ failed:
 
 ScheduleWakeup is called at the very start (Step 2), before any work begins. If the session is killed mid-tick, the wakeup fires and retries. The pipeline is idempotent:
 - File mode: item still `[ ]` → retry; `[x]`/`[!]` → skip
-- GitHub issues mode: issue still open with `backlog` label → retry; `pr-pending` label → check PR state (deploy if merged, remind if open); closed or `failed` label skips naturally via the priority sort
+- GitHub issues mode: issue still open with `backlog` label → retry; `pr-pending` issues are caught by the dedicated first query in Step 1 and checked immediately; closed or `failed` issues are absent from both queries and skipped naturally
 
 ## Constraints
 
