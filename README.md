@@ -75,19 +75,19 @@ notify: bash ~/main/scripts/notify-main.sh "[backlog] [myproject] {message}"
 The `notify` field is a shell command run after every tick. `{message}` is replaced with the outcome text (e.g. `feature — ✓ released` or `feature — ✗ failed: reason`). Examples:
 
 ```yaml
-# Telegram
-notify: bash ~/main/scripts/notify-main.sh "[backlog] [myproject] {message}"
+# Custom script (simplest — put your notification logic there)
+notify: bash ~/notify.sh "[myproject] {message}"
 
 # Slack incoming webhook
 notify: >
   curl -s -X POST -H 'Content-type: application/json'
-  --data '{"text":"[backlog] [myproject] {message}"}'
+  --data '{"text":"[myproject] {message}"}'
   https://hooks.slack.com/services/T.../B.../xxx
 
 # Discord webhook
 notify: >
   curl -s -X POST -H 'Content-type: application/json'
-  --data '{"content":"[backlog] [myproject] {message}"}'
+  --data '{"content":"[myproject] {message}"}'
   https://discord.com/api/webhooks/.../xxx
 ```
 
