@@ -5,8 +5,11 @@ A Claude Code skill that works through a backlog one feature at a time — from 
 ## Install
 
 ```bash
-cp commands/backlog.md ~/.claude/commands/backlog.md
+curl -sL https://raw.githubusercontent.com/jamessoubry/backlog/main/commands/backlog.md \
+  -o ~/.claude/commands/backlog.md
 ```
+
+Or manually copy `commands/backlog.md` into `~/.claude/commands/`.
 
 ## Usage
 
