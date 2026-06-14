@@ -72,7 +72,24 @@ notify: bash ~/main/scripts/notify-main.sh "[backlog] [myproject] {message}"
                            # notification command; {message} is substituted. Omit to skip.
 ```
 
-The `notify` field is a shell command run after every tick. `{message}` is replaced with the outcome text (e.g. `feature — ✓ released` or `feature — ✗ failed: reason`). Any command works — curl a webhook, send a Slack message, write to a log file.
+The `notify` field is a shell command run after every tick. `{message}` is replaced with the outcome text (e.g. `feature — ✓ released` or `feature — ✗ failed: reason`). Examples:
+
+```yaml
+# Telegram
+notify: bash ~/main/scripts/notify-main.sh "[backlog] [myproject] {message}"
+
+# Slack incoming webhook
+notify: >
+  curl -s -X POST -H 'Content-type: application/json'
+  --data '{"text":"[backlog] [myproject] {message}"}'
+  https://hooks.slack.com/services/T.../B.../xxx
+
+# Discord webhook
+notify: >
+  curl -s -X POST -H 'Content-type: application/json'
+  --data '{"content":"[backlog] [myproject] {message}"}'
+  https://discord.com/api/webhooks/.../xxx
+```
 
 When `pr_required: true`, the releaser pushes a feature branch and opens a PR instead of deploying directly. The item is marked `[~]` / `pr-pending`. On the next `/backlog` run, the PR is checked: merged → deploy; still open → notify and stop; closed without merge → mark failed.
 
@@ -82,6 +99,6 @@ Each tick:
 1. Schedules a recovery wakeup before any work begins
 2. Picks the next item (checks PR-pending items first)
 3. Runs a three-phase Workflow: **Implement → Test → Release**
-4. Updates state and notifies via Telegram
+4. Updates state and runs the `notify` command (if configured)
 
 270s between ticks — within the 5-minute prompt cache TTL, giving the rolling window room to recover. If a session is killed mid-tick, the queued wakeup retries the item.
