@@ -68,6 +68,7 @@ priority: [P0, P1, P2]         # priority label order, high→low (default)
 pr_required: false              # if true: push branch + open PR instead of pushing to main; poll for merge before deploying
 pr_poll_interval: 300           # seconds between merge checks (default: 300)
 pr_timeout: 86400               # seconds before giving up on a PR (default: 86400 = 24h)
+notify: bash ~/main/scripts/notify-main.sh "{message}"  # notification command; {message} is substituted. Omit to skip notifications.
 ```
 
 When reading project config, check `<project_dir>/.backlog.yml` first. If it exists, use those values. If it doesn't exist or a field is missing, fall back to the project map below.
@@ -261,10 +262,19 @@ gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
 
 ### Step 8 — Notify
 
+Read `NOTIFY_CMD` from `.backlog.yml`. If absent, skip this step.
+
+Otherwise substitute `{message}` in `NOTIFY_CMD` with the notification text and run it:
+
 ```bash
-bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — ✓ released"
-# or on failure:
-bash ~/main/scripts/notify-main.sh "Backlog [project]: <feature> — ✗ failed: <reason>"
+# On success:
+MSG="Backlog [project]: <feature> — ✓ released"
+# On failure:
+MSG="Backlog [project]: <feature> — ✗ failed: <reason>"
+
+# Substitute and run:
+CMD="${NOTIFY_CMD//\{message\}/$MSG}"
+eval "$CMD"
 ```
 
 ## Rate limit recovery

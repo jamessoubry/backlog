@@ -68,7 +68,11 @@ deploy: ./deploy.sh        # deploy command
 label: backlog             # issue label to filter on (default: backlog)
 priority: [P0, P1, P2]    # priority label order, high→low
 pr_required: false         # if true: push branch + open PR instead of pushing to main
+notify: bash ~/main/scripts/notify-main.sh "[backlog] [myproject] {message}"
+                           # notification command; {message} is substituted. Omit to skip.
 ```
+
+The `notify` field is a shell command run after every tick. `{message}` is replaced with the outcome text (e.g. `feature — ✓ released` or `feature — ✗ failed: reason`). Any command works — curl a webhook, send a Slack message, write to a log file.
 
 When `pr_required: true`, the releaser pushes a feature branch and opens a PR instead of deploying directly. The item is marked `[~]` / `pr-pending`. On the next `/backlog` run, the PR is checked: merged → deploy; still open → notify and stop; closed without merge → mark failed.
 
