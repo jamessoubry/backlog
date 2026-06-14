@@ -89,6 +89,26 @@ When reading project config, check `<project_dir>/.backlog.yml` first. If it exi
 
 ## Instructions
 
+### Step 0 — Lockfile check
+
+Before any work, check for a global lockfile that prevents two backlog runs competing for RAM:
+
+```bash
+LOCK=/tmp/backlog.lock
+if [ -f "$LOCK" ]; then
+  OWNER=$(cat "$LOCK")
+  # Notify using NOTIFY_CMD if available, else skip
+  echo "Backlog already running: $OWNER — try again when it finishes"
+  STOP
+fi
+echo "<project> — started $(date -u +%H:%M:%SZ)" > "$LOCK"
+```
+
+Release the lockfile at the end of every outcome path (success, failure, PR pending, or early stop):
+```bash
+rm -f "$LOCK"
+```
+
 ### Step 1 — Find the next item
 
 **File mode:**
@@ -260,9 +280,15 @@ gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
   --add-label "failed" --remove-label "in-progress" 2>/dev/null || true
 ```
 
-### Step 8 — Notify
+### Step 8 — Notify and release lock
 
-Read `NOTIFY_CMD` from `.backlog.yml`. If absent, skip this step.
+Release the lockfile, then notify:
+
+```bash
+rm -f /tmp/backlog.lock
+```
+
+Read `NOTIFY_CMD` from `.backlog.yml`. If absent, skip notification.
 
 Otherwise substitute `{message}` in `NOTIFY_CMD` with the notification text and run it:
 
@@ -275,6 +301,11 @@ MSG="Backlog [project]: <feature> — ✗ failed: <reason>"
 # Substitute and run:
 CMD="${NOTIFY_CMD//\{message\}/$MSG}"
 eval "$CMD"
+```
+
+Also release the lock on early-stop paths (backlog complete, PR still open):
+```bash
+rm -f /tmp/backlog.lock
 ```
 
 ## Rate limit recovery
