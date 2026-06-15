@@ -37,11 +37,14 @@ The argument is GitHub issues mode if it matches `owner/repo` (contains `/` but 
 - [x] [polybot] Already done — skipped
 - [!] [gavel] Failed item — PR closed without merge / test failure / reason
 - [~] [clawband] PR pending — PR #42 jamessoubry/clawband
+- [-] [shortlink] Parked item — not ready to implement yet
 ```
 
-`[ ]` = pending · `[x]` = done · `[!]` = failed · `[~]` = PR open, awaiting merge
+`[ ]` = pending · `[x]` = done · `[!]` = failed · `[~]` = PR open, awaiting merge · `[-]` = parked (skip forever until changed to `[ ]`)
 
 `[~]` items are not re-implemented — on the next run `/backlog` checks if the PR merged and either deploys or reminds you.
+
+`[-]` items are **permanently skipped** — the skill never processes them. Change to `[ ]` manually when ready to implement.
 
 ## GitHub issues mode — issue conventions
 
@@ -124,8 +127,8 @@ STATE=$(gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state')
 - If `OPEN`: `bash ~/main/scripts/notify-main.sh "Backlog [project]: PR #N still open — merge it then re-run /backlog"` then STOP
 - If `CLOSED`: mark `[~]` → `[!] — PR closed without merge` then continue to next item
 
-If no `[~]` exists, find the **first** `[ ]` line.
-If neither exists: `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
+If no `[~]` exists, find the **first** `[ ]` line. **Skip any `[-]` lines entirely — they are parked and must not be processed.**
+If neither exists (only `[x]`, `[!]`, `[-]` lines remain): `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
 
 **GitHub issues mode:**
 
