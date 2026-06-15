@@ -130,6 +130,8 @@ STATE=$(gh pr view <PR_NUMBER> --repo <REPO> --json state --jq '.state')
 If no `[~]` exists, find the **first** `[ ]` line. **Skip any `[-]` lines entirely — they are parked and must not be processed.**
 If neither exists (only `[x]`, `[!]`, `[-]` lines remain): `bash ~/main/scripts/notify-main.sh "Backlog complete: all items in <filepath> processed"` then STOP — do NOT call ScheduleWakeup.
 
+After finding the `[ ]` line, also capture any immediately following lines that are indented (start with 2+ spaces or a tab) — these are detail notes for the coder. Collect them as `FEATURE_DETAIL`. Stop collecting at the next blank line or next bullet (`- `).
+
 **GitHub issues mode:**
 
 Load `.backlog.yml` from the project dir (inferred from repo name) to get `BACKLOG_LABEL` and `PRIORITY_LABELS`.
@@ -182,9 +184,9 @@ This ensures recovery if the session exhausts the rolling window mid-tick.
 
 ### Step 3 — Parse the item
 
-**File mode:** extract `project` from `[tag]` and `feature` from the description.
+**File mode:** extract `project` from `[tag]` and `feature` from the description (bold title if present, otherwise the full line text after the checkbox). `FEATURE_DETAIL` = indented lines captured in Step 1 (empty string if none).
 
-**GitHub issues mode:** `project` = repo name (last segment of `owner/repo`). `feature` = issue title. `ISSUE_NUMBER` already set in Step 1.
+**GitHub issues mode:** `project` = repo name (last segment of `owner/repo`). `feature` = issue title. `ISSUE_NUMBER` already set in Step 1. `FEATURE_DETAIL` = issue body (fetch with `gh issue view $ISSUE_NUMBER --repo $REPO --json body --jq '.body'`).
 
 ### Step 4 — GitHub issue: set in-progress label
 
@@ -217,14 +219,33 @@ Then read `<project_dir>/CLAUDE.md` to understand architecture, build commands, 
 
 ### Step 6 — Run the feature pipeline
 
+**Before spawning any agents, check git state to detect a prior partial run** (e.g. from a session that was compacted mid-workflow). This makes recovery idempotent:
+
+```bash
+cd "<project_dir>"
+
+# Has the coder already committed for this feature?
+CODER_DONE=$(git log --oneline -5 | grep -i "\[backlog\]")
+
+# Has the coder committed but the releaser not yet pushed?
+UNPUSHED=$(git log origin/main..HEAD --oneline 2>/dev/null | grep -i "\[backlog\]")
+```
+
+- If `UNPUSHED` is non-empty: **coder and tester already ran** — skip straight to Phase 3 (Release) only
+- If `CODER_DONE` is non-empty but `UNPUSHED` is empty: push already happened, something else failed — proceed to Step 7 as SUCCESS
+- If neither: normal first run — run all three phases
+
 Use the Workflow tool with three phases:
 
 **Phase 1 — Implement** (label: `coder`)
 - Agent reads the project codebase and implements the feature
+- Feature description: `feature` — plain English title/description from the backlog line
+- Implementation notes: `FEATURE_DETAIL` — if non-empty, pass verbatim as additional context; these are file paths, constraints, and acceptance criteria the coder must follow
 - Makes targeted changes — no scope creep
 - Writes or updates tests alongside the feature
-- Commits with a clear message but does NOT push yet
+- Commits with a clear message prefixed with `[backlog]` — e.g. `[backlog] Add rate limiting to the API` — this prefix is used to detect prior runs after compaction
 - If `ISSUE_NUMBER` is set, append `Closes <REPO>#<ISSUE_NUMBER>` as a footer line in the commit message
+- Does NOT push
 
 **Phase 2 — Test** (label: `tester`)
 - Agent runs the project's test suite
