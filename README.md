@@ -105,3 +105,5 @@ Each tick:
 4. Updates state and runs the `notify` command (if configured)
 
 270s between ticks — within the 5-minute prompt cache TTL, giving the rolling window room to recover. If a session is killed mid-tick, the queued wakeup retries the item.
+
+**Survives context compaction.** Before spawning any agents, the skill checks `git log` for a `[backlog]` commit from a prior run. If the coder already committed but the releaser never pushed, the next tick skips straight to release. Work is never duplicated.
