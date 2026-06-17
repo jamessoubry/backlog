@@ -107,3 +107,40 @@ Each tick:
 270s between ticks — within the 5-minute prompt cache TTL, giving the rolling window room to recover. If a session is killed mid-tick, the queued wakeup retries the item.
 
 **Survives context compaction.** Before spawning any agents, the skill checks `git log` for a `[backlog]` commit from a prior run. If the coder already committed but the releaser never pushed, the next tick skips straight to release. Work is never duplicated.
+
+## Customising agent behaviour via CLAUDE.md
+
+Each agent reads the project's `CLAUDE.md` before doing anything. This is where you shape how the pipeline behaves for your specific project — build commands, commit conventions, cadence rules, and releaser overrides all belong here.
+
+```markdown
+# myproject
+
+## Build & test
+
+```bash
+npm test              # run full test suite
+npm run lint          # must pass before commit
+```
+
+## Commit conventions
+
+- Branch: `feat/<slug>` for features, `fix/<slug>` for bugs
+- Commit message: `feat:` / `fix:` prefix, e.g. `feat: add rate limiting`
+- Always run `npm run lint` before committing
+
+## Backlog pipeline — cadence
+
+Run one feature at a time. Most items touch the same core files, so
+concurrent open PRs will conflict. Wait for the current PR to merge
+before running `/backlog` again.
+
+## Backlog pipeline — releaser
+
+When the releaser agent runs for this project:
+- **Do NOT push directly to main** — push a feature branch and open a PR
+- Do NOT run the deploy command — that runs automatically after merge via CI
+- Mark the release step as SUCCESS once the PR is open and CI is green
+- Check CI: `gh pr checks --watch --repo owner/myproject`
+```
+
+The agents pick up whatever is in `CLAUDE.md` — build steps, linting requirements, branch naming rules, PR conventions. You don't need to modify the skill itself; the CLAUDE.md is the extension point.
