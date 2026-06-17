@@ -101,7 +101,7 @@ When `pr_required: true`, the releaser pushes a feature branch and opens a PR in
 Each tick:
 1. Schedules a recovery wakeup before any work begins
 2. Picks the next item (checks PR-pending items first)
-3. Runs a three-phase Workflow: **Implement → Test → Release**
+3. Runs three sequential agents: **Implement → Test → Release**
 4. Updates state and runs the `notify` command (if configured)
 
 270s between ticks — within the 5-minute prompt cache TTL, giving the rolling window room to recover. If a session is killed mid-tick, the queued wakeup retries the item.
