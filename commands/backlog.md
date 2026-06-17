@@ -235,36 +235,41 @@ UNPUSHED=$(git log origin/main..HEAD --oneline 2>/dev/null | grep -i "\[backlog\
 - If `CODER_DONE` is non-empty but `UNPUSHED` is empty: push already happened, something else failed — proceed to Step 7 as SUCCESS
 - If neither: normal first run — run all three phases
 
-Use the Workflow tool with three phases:
+Run the three phases as sequential Agent tool calls (NOT the Workflow tool — agents consistently struggle to write Workflow scripts inline and fall back to Agent calls anyway; just use Agent directly).
 
-**Phase 1 — Implement** (label: `coder`)
-- Agent reads the project codebase and implements the feature
-- Feature description: `feature` — plain English title/description from the backlog line
-- Implementation notes: `FEATURE_DETAIL` — if non-empty, pass verbatim as additional context; these are file paths, constraints, and acceptance criteria the coder must follow
-- Makes targeted changes — no scope creep
-- Writes or updates tests alongside the feature
-- Commits with a clear message prefixed with `[backlog]` — e.g. `[backlog] Add rate limiting to the API` — this prefix is used to detect prior runs after compaction
+**Phase 1 — Implement**
+
+Spawn an Agent with this brief:
+- Read the project CLAUDE.md and relevant source files, then implement the feature
+- Feature: `<feature>` (plain English title/description from the backlog line)
+- If `FEATURE_DETAIL` is set, pass it verbatim as additional context (file paths, constraints, acceptance criteria)
+- Make targeted changes — no scope creep
+- Write or update tests alongside the feature
+- Commit with message prefixed `[backlog]` — e.g. `[backlog] Add rate limiting to the API` — this prefix is used to detect prior runs after compaction
 - If `ISSUE_NUMBER` is set, append `Closes <REPO>#<ISSUE_NUMBER>` as a footer line in the commit message
-- Does NOT push
+- Do NOT push
+- Return "DONE: <one-line summary>" or "FAILED: <reason>"
 
-**Phase 2 — Test** (label: `tester`)
-- Agent runs the project's test suite
-- Verifies new tests pass and no regressions introduced
-- If tests fail: return failure details, abort pipeline
+**Phase 2 — Test**
 
-**Phase 3 — Release** (label: `releaser`)
+Only run if Phase 1 returned DONE. Spawn an Agent with this brief:
+- Run the project's full test suite
+- Verify the new tests pass and no regressions are introduced
+- Return "PASSED" or "FAILED: <details>"
 
-Only runs if Test phase passed. Behaviour depends on `pr_required` from `.backlog.yml`:
+**Phase 3 — Release**
 
-**`pr_required: false` (default):**
+Only run if Phase 2 returned PASSED. Behaviour depends on `pr_required` from `.backlog.yml`:
+
+**`pr_required: false` (default):** Spawn an Agent with this brief:
 - `unset GITHUB_TOKEN && git push` direct to main
-- Run deploy command
-- Returns "SUCCESS: deployed" or "FAILURE: <reason>"
+- Run the deploy command: `<DEPLOY_CMD>`
+- Return "SUCCESS: deployed" or "FAILURE: <reason>"
 
-**`pr_required: true`:**
+**`pr_required: true`:** Spawn an Agent with this brief:
 - Push to a feature branch: `git checkout -b backlog/<slug> && git push -u origin backlog/<slug>`
 - Open a PR: `unset GITHUB_TOKEN && gh pr create --repo "$REPO" --title "<feature>" --body "Closes #$ISSUE_NUMBER\n\nAutomated via /backlog" --base main`
-- Return "PR_PENDING: <pr_number>" — do NOT deploy yet, no background agent, no polling
+- Return "PR_PENDING: <pr_number>"
 
 ### Step 7 — Update state
 
