@@ -174,9 +174,24 @@ If result is null/empty: `bash ~/main/scripts/notify-main.sh "Backlog complete: 
 
 Extract `ISSUE_NUMBER` and `ISSUE_TITLE` from the JSON.
 
-### Step 2 — Schedule the next tick
+### Step 2 — Schedule the next tick (crash recovery)
 
-Only reached if an item was found in Step 1. Call ScheduleWakeup now:
+Only reached if an item was found in Step 1.
+
+First, peek at the project config to check `pr_required`. Parse the `[tag]` from the item line to infer the project dir, then:
+```bash
+python3 -c "
+import yaml, sys
+try:
+    cfg = yaml.safe_load(open('<project_dir>/.backlog.yml'))
+    print(cfg.get('pr_required', False))
+except: print(False)
+"
+```
+
+**If `pr_required: true`**: skip ScheduleWakeup entirely. The git state check in Step 6 handles crash recovery — if the session dies mid-implement, the next manual `/backlog` run detects the unpushed commit and skips straight to release. No auto-redrive needed because you need time to review the PR before it proceeds.
+
+**If `pr_required: false` (default)**: call ScheduleWakeup now:
 - `delaySeconds: 270`
 - `prompt: "/backlog <same argument as current invocation>"` — file path or `owner/repo`
 
@@ -295,7 +310,7 @@ unset GITHUB_TOKEN
 gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "pr-pending" --remove-label "in-progress"
 ```
 
-Zero polling. Zero ongoing cost. The next `/backlog` run detects `pr-pending` issues via a dedicated query (Step 1), checks the PR in one API call, and deploys if merged.
+Zero polling. Zero ongoing cost. No auto-redrive is scheduled — you review and merge the PR at your own pace, then run `/backlog` manually. The next run detects `pr-pending` issues via a dedicated query (Step 1), checks the PR in one API call, and deploys if merged.
 
 On **FAILURE** (any phase failed):
 ```bash
