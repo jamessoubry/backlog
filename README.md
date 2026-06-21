@@ -5,7 +5,7 @@ A Claude Code skill that works through a backlog one feature at a time — from 
 ## Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/jamessoubry/backlog/main/commands/backlog.md \
+curl -sL https://raw.githubusercontent.com/jamessoubry/claude-backlog/main/commands/backlog.md \
   -o ~/.claude/commands/backlog.md
 ```
 
